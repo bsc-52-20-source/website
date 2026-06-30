@@ -138,7 +138,14 @@
       <h1>Executive <span>Control Console</span></h1>
       <p style="color: var(--text-muted); font-size: 13px; margin-top: 4px;">Crest Academy Database Pipeline Administration</p>
     </div>
-    <a href="index.html" class="back-btn"><i class="fa-solid fa-arrow-left-long"></i> Exit Console Directory</a>
+    <div style="display:flex; align-items:center; gap:14px;">
+      <div style="text-align:right;">
+        <div style="font-size:12px; font-weight:700; color:#fff;" id="staffNameDisplay"></div>
+        <div style="font-size:10px; color:var(--text-muted);" id="staffRoleDisplay"></div>
+      </div>
+      <button onclick="logoutStaff()" title="Sign out" style="background: rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.2); color: var(--danger); width:38px; height:38px; border-radius:10px; cursor:pointer; font-size:14px;"><i class="fas fa-right-from-bracket"></i></button>
+      <a href="index.html" class="back-btn"><i class="fa-solid fa-arrow-left-long"></i> Exit Console Directory</a>
+    </div>
   </header>
 
   <div class="admin-grid">
@@ -238,6 +245,14 @@
         <div style="font-size: 12px; color: var(--text-muted);">Post assignments, review submissions, and grade student work.</div>
       </div>
       <a href="assignments.html?role=admin" target="_blank" style="background: linear-gradient(135deg, var(--accent-hover), var(--accent-primary)); color: #040714; padding: 12px 22px; border-radius: 10px; font-size: 13px; font-weight: 700; text-decoration: none; display: flex; align-items: center; gap: 8px; box-shadow: 0 4px 20px rgba(56,189,248,0.25);"><i class="fas fa-arrow-up-right-from-square"></i> Open Faculty Console</a>
+    </div>
+  </div>
+
+  <!-- Manage Staff (root admin only, shown/hidden via JS) -->
+  <div class="catalog-section" id="manageStaffSection" style="display:none;">
+    <div class="catalog-title">Staff Accounts</div>
+    <div style="background-color: var(--bg-card); border: 1px solid var(--border-color); border-radius: 16px; padding: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.3);">
+      <div id="staffAccountsList"><div style="text-align:center; color:var(--text-muted); font-size:12px; padding:20px 0;">Loading staff accounts...</div></div>
     </div>
   </div>
 
@@ -361,10 +376,30 @@
   </footer>
 
   <script>
+    // ===========================================================
+    // SESSION GATE — redirect to login if not signed in.
+    // Checked immediately, before any page content runs.
+    // ===========================================================
+    const staffSessionRaw = sessionStorage.getItem('crest_staff_session');
+    if (!staffSessionRaw) {
+      window.location.href = 'login.html';
+    }
+    const staffSession = staffSessionRaw ? JSON.parse(staffSessionRaw) : null;
+
+    function logoutStaff() {
+      if (!confirm("Sign out of the admin console?")) return;
+      sessionStorage.removeItem('crest_staff_session');
+      window.location.href = 'login.html';
+    }
+
     // MATCHED COHESIVE SYSTEM LEDGER CREDENTIALS
     const API_KEY = "$2a$10$q1K8WzlWXgpkdX5BYcLBfuiYIdv7ZrDcy2OjEiGlXdWC2Y5/CB7e6";
     const BIN_ID = "6a3e2279da38895dfe014a42";
     const BASE_URL = "https://api.jsonbin.io/v3/b/" + BIN_ID;
+
+    // Staff accounts bin (used by login.html, and by the Manage Staff panel below)
+    const ACCOUNTS_BIN_ID = "6a438e08da38895dfe14f2bf";
+    const ACCOUNTS_BASE_URL = "https://api.jsonbin.io/v3/b/" + ACCOUNTS_BIN_ID;
 
     // Separate bin just for live chat (books bin stays untouched by chat traffic)
     const CHAT_BIN_ID = "6a4227f6da38895dfe0eb40f";
@@ -1581,12 +1616,117 @@
       refreshAdminChatMesh();
     }
 
+    // ===========================================================
+    // STAFF SESSION DISPLAY + MANAGE STAFF (root only)
+    // ===========================================================
+    async function getAccounts() {
+      try {
+        const res = await fetch(ACCOUNTS_BASE_URL + "/latest", {
+          headers: { "X-Master-Key": API_KEY, "X-Bin-Meta": "false" }
+        });
+        const data = await res.json();
+        return data.accounts || (Array.isArray(data) ? data : []);
+      } catch (err) {
+        console.error("Failed to fetch accounts:", err);
+        return [];
+      }
+    }
+    async function saveAccounts(accountsArray) {
+      await fetch(ACCOUNTS_BASE_URL, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", "X-Master-Key": API_KEY },
+        body: JSON.stringify({ accounts: accountsArray })
+      });
+    }
+
+    function renderStaffHeader() {
+      if (!staffSession) return;
+      document.getElementById('staffNameDisplay').textContent = `${staffSession.firstName} ${staffSession.surname}`;
+      document.getElementById('staffRoleDisplay').textContent = staffSession.isRoot ? 'Root Administrator' : 'Staff Member';
+
+      if (staffSession.isRoot) {
+        document.getElementById('manageStaffSection').style.display = 'block';
+        renderStaffAccountsList();
+      }
+    }
+
+    async function renderStaffAccountsList() {
+      const container = document.getElementById('staffAccountsList');
+      const accounts = await getAccounts();
+
+      if (accounts.length === 0) {
+        container.innerHTML = `<div style="text-align:center; color:var(--text-muted); font-size:12px; padding:20px 0;">No staff accounts yet.</div>`;
+        return;
+      }
+
+      const pending = accounts.filter(a => a.status === 'pending');
+      const others = accounts.filter(a => a.status !== 'pending');
+
+      let html = '';
+
+      if (pending.length > 0) {
+        html += `<div style="font-size:11px; font-weight:700; color:var(--warn); text-transform:uppercase; margin-bottom:10px;"><i class="fas fa-clock"></i> Pending Approval (${pending.length})</div>`;
+        html += pending.map(a => staffRowHtml(a, true)).join('');
+        html += `<div style="height:1px; background:var(--border-color); margin:18px 0;"></div>`;
+      }
+
+      html += `<div style="font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:10px;">All Staff</div>`;
+      html += others.map(a => staffRowHtml(a, false)).join('');
+
+      container.innerHTML = html;
+    }
+
+    function staffRowHtml(account, isPending) {
+      return `
+        <div style="display:flex; align-items:center; justify-content:space-between; padding:12px 14px; background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.04); border-radius:10px; margin-bottom:8px; flex-wrap:wrap; gap:10px;">
+          <div>
+            <div style="font-size:13px; font-weight:700; color:#fff;">${account.firstName} ${account.surname} ${account.isRoot ? '<span style="color:var(--accent-primary); font-size:10px;">(Root)</span>' : ''}</div>
+            <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">@${account.username} · ${account.phone} · ${account.status}</div>
+          </div>
+          <div style="display:flex; gap:8px;">
+            ${isPending ? `
+              <button onclick="approveStaffAccount('${account.username}')" style="background:rgba(16,185,129,0.1); border:1px solid rgba(16,185,129,0.25); color:var(--success); padding:7px 14px; border-radius:8px; font-size:11px; font-weight:700; cursor:pointer;"><i class="fas fa-check"></i> Approve</button>
+              <button onclick="rejectStaffAccount('${account.username}')" style="background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.25); color:var(--danger); padding:7px 14px; border-radius:8px; font-size:11px; font-weight:700; cursor:pointer;"><i class="fas fa-xmark"></i> Reject</button>
+            ` : !account.isRoot ? `
+              <button onclick="removeStaffAccount('${account.username}')" style="background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:13px; padding:4px 8px; opacity:0.6;" title="Remove account"><i class="fas fa-trash-can"></i></button>
+            ` : ''}
+          </div>
+        </div>
+      `;
+    }
+
+    async function approveStaffAccount(username) {
+      const accounts = await getAccounts();
+      const acc = accounts.find(a => a.username === username);
+      if (acc) acc.status = 'approved';
+      await saveAccounts(accounts);
+      renderStaffAccountsList();
+    }
+
+    async function rejectStaffAccount(username) {
+      if (!confirm("Reject this account request?")) return;
+      const accounts = await getAccounts();
+      const acc = accounts.find(a => a.username === username);
+      if (acc) acc.status = 'rejected';
+      await saveAccounts(accounts);
+      renderStaffAccountsList();
+    }
+
+    async function removeStaffAccount(username) {
+      if (!confirm("Remove this staff account permanently? They will no longer be able to log in.")) return;
+      let accounts = await getAccounts();
+      accounts = accounts.filter(a => a.username !== username);
+      await saveAccounts(accounts);
+      renderStaffAccountsList();
+    }
+
     // Active polling setup to dynamically fetch updates every 4 seconds
     setInterval(refreshAdminChatMesh, 4000);
 
     document.addEventListener("DOMContentLoaded", () => {
       adaptFormAllocations();
       loadBookList();
+      renderStaffHeader();
     });
   </script>
 </body>
